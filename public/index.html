@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ग्रुप कॉल</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&family=Hind:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0e2a2f;
+    --panel: #153a40;
+    --text: #f2ede2;
+    --muted: #9db8b8;
+    --accent: #ffb703;
+    --danger: #ef6351;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Hind", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  main { width: 100%; max-width: 420px; }
+  h1 {
+    font-family: "Baloo 2", system-ui, sans-serif;
+    font-weight: 800;
+    font-size: clamp(2.4rem, 11vw, 3.6rem);
+    line-height: 1.05;
+    margin: 0 0 12px;
+  }
+  p.lead { color: var(--muted); font-size: 1.05rem; margin: 0 0 28px; line-height: 1.5; }
+  label { display: block; font-weight: 500; margin-bottom: 8px; }
+  input {
+    width: 100%;
+    font: inherit;
+    font-size: 1.2rem;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 2px solid transparent;
+    background: var(--panel);
+    color: var(--text);
+  }
+  input:focus-visible { outline: none; border-color: var(--accent); }
+  button {
+    font-family: "Baloo 2", system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 1.15rem;
+    border: 0;
+    border-radius: 12px;
+    padding: 14px 18px;
+    cursor: pointer;
+    color: #1a1a1a;
+    background: var(--accent);
+  }
+  button:focus-visible { outline: 3px solid var(--text); outline-offset: 2px; }
+  button.full { width: 100%; margin-top: 14px; }
+  button.ghost { background: var(--panel); color: var(--text); }
+  button.end { background: var(--danger); color: #fff; }
+  #error { color: var(--danger); min-height: 1.4em; margin: 12px 0 0; }
+  #call { display: none; }
+  .count {
+    font-family: "Baloo 2", system-ui, sans-serif;
+    font-weight: 800;
+    font-size: clamp(5rem, 28vw, 8rem);
+    line-height: 1;
+    color: var(--accent);
+    margin: 8px 0 0;
+  }
+  .count-label { color: var(--muted); margin: 0 0 6px; }
+  .room-name {
+    display: inline-block;
+    background: var(--panel);
+    padding: 6px 12px;
+    border-radius: 8px;
+    margin-bottom: 24px;
+    word-break: break-all;
+  }
+  .row { display: flex; gap: 10px; margin-top: 28px; flex-wrap: wrap; }
+  .row button { flex: 1; min-width: 120px; }
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .55; } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <section id="join">
+    <h1>दोस्तों से बात करो</h1>
+    <p class="lead">एक ग्रुप आईडी लिखो और अपने दोस्तों को वही आईडी बताओ। जो भी वही आईडी डालेगा, कॉल में जुड़ जाएगा।</p>
+    <label for="room">ग्रुप आईडी</label>
+    <input id="room" autocomplete="off" placeholder="जैसे: dosto-ki-mehfil">
+    <button class="full" id="joinBtn">कॉल में जुड़ें</button>
+    <p id="error" role="alert"></p>
+  </section>
+
+  <section id="call">
+    <p class="count-label">कॉल में लोग</p>
+    <p class="count" id="count">1</p>
+    <p class="room-name">ग्रुप आईडी: <b id="roomName"></b></p>
+    <p class="lead" id="status">कोई और जुड़ने का इंतज़ार...</p>
+    <div class="row">
+      <button class="ghost" id="muteBtn">म्यूट करें</button>
+      <button class="ghost" id="shareBtn">लिंक कॉपी करें</button>
+      <button class="end" id="leaveBtn">कॉल काटें</button>
+    </div>
+  </section>
+</main>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const ICE = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+const pcs = {};
+let socket, stream, currentRoom;
+
+// लिंक से सीधे आईडी भरने के लिए: ?room=आईडी
+const urlRoom = new URLSearchParams(location.search).get("room");
+if (urlRoom) $("room").value = urlRoom;
+
+$("joinBtn").onclick = join;
+$("room").addEventListener("keydown", (e) => { if (e.key === "Enter") join(); });
+
+async function join() {
+  const room = $("room").value.trim();
+  if (!room) { $("error").textContent = "पहले ग्रुप आईडी लिखो।"; return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    $("error").textContent = "माइक्रोफ़ोन की अनुमति चाहिए। ब्राउज़र में अनुमति दो और फिर से कोशिश करो।";
+    return;
+  }
+  currentRoom = room;
+  socket = io();
+  setupSocket();
+  socket.emit("join", room);
+  $("roomName").textContent = room;
+  $("join").style.display = "none";
+  $("call").style.display = "block";
+  update();
+}
+
+function setupSocket() {
+  socket.on("peers", (ids) => ids.forEach((id) => connect(id, true)));
+
+  socket.on("signal", async ({ from, data }) => {
+    const pc = pcs[from] || connect(from, false);
+    if (data.sdp) {
+      await pc.setRemoteDescription(data.sdp);
+      if (data.sdp.type === "offer") {
+        await pc.setLocalDescription(await pc.createAnswer());
+        socket.emit("signal", { to: from, data: { sdp: pc.localDescription } });
+      }
+    } else if (data.candidate) {
+      try { await pc.addIceCandidate(data.candidate); } catch (e) {}
+    }
+  });
+
+  socket.on("left", remove);
+}
+
+function connect(id, initiator) {
+  const pc = new RTCPeerConnection(ICE);
+  pcs[id] = pc;
+  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate) socket.emit("signal", { to: id, data: { candidate: e.candidate } });
+  };
+  pc.ontrack = (e) => {
+    let audio = $("a-" + id);
+    if (!audio) {
+      audio = document.createElement("audio");
+      audio.id = "a-" + id;
+      audio.autoplay = true;
+      document.body.appendChild(audio);
+    }
+    audio.srcObject = e.streams[0];
+  };
+  pc.onconnectionstatechange = () => {
+    if (["failed", "closed"].includes(pc.connectionState)) remove(id);
+  };
+
+  if (initiator) {
+    pc.createOffer()
+      .then((o) => pc.setLocalDescription(o))
+      .then(() => socket.emit("signal", { to: id, data: { sdp: pc.localDescription } }));
+  }
+  update();
+  return pc;
+}
+
+function remove(id) {
+  if (pcs[id]) pcs[id].close();
+  delete pcs[id];
+  const a = $("a-" + id);
+  if (a) a.remove();
+  update();
+}
+
+function update() {
+  const others = Object.keys(pcs).length;
+  $("count").textContent = others + 1;
+  $("status").textContent = others
+    ? "कॉल चालू है। बोलो, सब सुन रहे हैं।"
+    : "कोई और जुड़ने का इंतज़ार...";
+  $("status").classList.toggle("pulse", others === 0);
+}
+
+$("muteBtn").onclick = () => {
+  const track = stream.getAudioTracks()[0];
+  track.enabled = !track.enabled;
+  $("muteBtn").textContent = track.enabled ? "म्यूट करें" : "अनम्यूट करें";
+};
+
+$("shareBtn").onclick = async () => {
+  const link = location.origin + "/?room=" + encodeURIComponent(currentRoom);
+  try {
+    await navigator.clipboard.writeText(link);
+    $("shareBtn").textContent = "कॉपी हो गया";
+  } catch (e) {
+    prompt("यह लिंक दोस्तों को भेजो:", link);
+  }
+};
+
+$("leaveBtn").onclick = () => {
+  stream.getTracks().forEach((t) => t.stop());
+  location.href = "/";
+};
+</script>
+</body>
+</html>
